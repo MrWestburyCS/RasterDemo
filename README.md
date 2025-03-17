@@ -8,6 +8,10 @@ An interactive web-based demonstration of raster graphics concepts including:
 - Sampling techniques (Point, Box, and Gaussian)
 - Color depth and quantization
 
+## Live Demo
+
+Check out the live demo: [Raster Graphics Demo](https://mrwestburycs.github.io/RasterDemo/)
+
 ## Features
 
 - **Pixel Creator**: Draw pixel art and see its binary representation
@@ -17,7 +21,11 @@ An interactive web-based demonstration of raster graphics concepts including:
 
 ## Usage
 
-Simply open `index.html` in a web browser to access all demonstrations.
+You can access the demo online using the GitHub Pages link above.
+
+Alternatively, you can run it locally:
+1. Clone this repository
+2. Open `index.html` in any web browser
 
 ## Technologies
 
