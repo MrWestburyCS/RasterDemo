@@ -821,129 +821,294 @@
     const originalCanvas = document.getElementById("original-canvas");
     const enlargedCanvas = document.getElementById("enlarged-canvas");
     const reducedCanvas = document.getElementById("reduced-canvas");
-    const colorPicker = document.getElementById("resize-color-picker");
-    const clearButton = document.getElementById("clear-original");
-  
+    
+    // Remove old elements that are no longer needed
+    const colorPickerEl = document.getElementById("resize-color-picker");
+    const clearButtonEl = document.getElementById("clear-original");
+    if (colorPickerEl) colorPickerEl.remove();
+    if (clearButtonEl) clearButtonEl.remove();
+    
+    // Get tool container and add new zoom controls
+    const toolsContainer = document.querySelector("#original-canvas-container + .tools");
+    if (toolsContainer) {
+      toolsContainer.innerHTML = `
+        <div class="zoom-controls">
+          <label for="zoom-factor">Zoom Factor:</label>
+          <input type="range" id="zoom-factor" min="0.5" max="10" step="0.1" value="2">
+          <input type="number" id="zoom-number" min="0.5" max="10" step="0.1" value="2" style="width: 60px;">
+          <span id="zoom-value">2.0x</span>
+        </div>
+        <div>
+          <button id="different-image">Change Image</button>
+        </div>
+      `;
+    }
+    
+    // Canvas contexts
     const originalCtx = originalCanvas.getContext("2d");
     const enlargedCtx = enlargedCanvas.getContext("2d");
     const reducedCtx = reducedCanvas.getContext("2d");
-  
-    // Initialize canvases
-    originalCtx.fillStyle = "white";
-    originalCtx.fillRect(0, 0, originalCanvas.width, originalCanvas.height);
-  
-    enlargedCtx.fillStyle = "white";
-    enlargedCtx.fillRect(0, 0, enlargedCanvas.width, enlargedCanvas.height);
-  
-    reducedCtx.fillStyle = "white";
-    reducedCtx.fillRect(0, 0, reducedCanvas.width, reducedCanvas.height);
-  
-    // Variables for drawing
-    let isDrawing = false;
-    let currentColor = colorPicker.value;
-    let lastX = 0;
-    let lastY = 0;
-  
-    // Event listeners
-    colorPicker.addEventListener("input", () => {
-      currentColor = colorPicker.value;
-    });
-  
-    clearButton.addEventListener("click", clearCanvas);
-  
-    originalCanvas.addEventListener("mousedown", startDrawing);
-    originalCanvas.addEventListener("mousemove", draw);
-    originalCanvas.addEventListener("mouseup", stopDrawing);
-    originalCanvas.addEventListener("mouseout", stopDrawing);
-  
-    function startDrawing(e) {
-      isDrawing = true;
-      [lastX, lastY] = getMousePos(originalCanvas, e);
+    
+    // Available images for demonstration
+    const images = [
+      // We're generating these programmatically to avoid external dependencies
+      createCheckerboardImage(),
+      createGridPatternImage(),
+      createCirclePatternImage(),
+      createTextImage()
+    ];
+    
+    let currentImageIndex = 0;
+    let zoomFactor = 2.0; // Initial zoom factor
+    
+    // Initialize by drawing the first image
+    renderImage();
+    
+    // Event listeners for new controls
+    const zoomSlider = document.getElementById("zoom-factor");
+    const zoomNumber = document.getElementById("zoom-number");
+    const zoomValueDisplay = document.getElementById("zoom-value");
+    const changeImageButton = document.getElementById("different-image");
+    
+    if (zoomSlider) {
+      zoomSlider.addEventListener("input", () => {
+        zoomFactor = parseFloat(zoomSlider.value);
+        // Update numeric input to match
+        if (zoomNumber) zoomNumber.value = zoomFactor;
+        zoomValueDisplay.textContent = zoomFactor.toFixed(1) + "x";
+        updateEnlargedCanvas();
+      });
     }
-  
-    function draw(e) {
-      if (!isDrawing) return;
-  
-      const [x, y] = getMousePos(originalCanvas, e);
-  
-      // Draw on original canvas
-      originalCtx.strokeStyle = currentColor;
-      originalCtx.lineWidth = 3;
-      originalCtx.lineCap = "round";
-      originalCtx.beginPath();
-      originalCtx.moveTo(lastX, lastY);
-      originalCtx.lineTo(x, y);
-      originalCtx.stroke();
-  
-      lastX = x;
-      lastY = y;
-  
-      // Update resized versions
-      updateResizedCanvases();
+    
+    if (zoomNumber) {
+      zoomNumber.addEventListener("input", () => {
+        let newZoom = parseFloat(zoomNumber.value);
+        // Clamp value to min/max range
+        newZoom = Math.min(Math.max(newZoom, 0.5), 10);
+        zoomFactor = newZoom;
+        // Update slider to match
+        if (zoomSlider) zoomSlider.value = zoomFactor;
+        zoomValueDisplay.textContent = zoomFactor.toFixed(1) + "x";
+        updateEnlargedCanvas();
+      });
     }
-  
-    function stopDrawing() {
-      isDrawing = false;
+    
+    if (changeImageButton) {
+      changeImageButton.addEventListener("click", () => {
+        currentImageIndex = (currentImageIndex + 1) % images.length;
+        renderImage();
+      });
     }
-  
-    function getMousePos(canvas, evt) {
-      const rect = canvas.getBoundingClientRect();
-      return [
-        ((evt.clientX - rect.left) / (rect.right - rect.left)) * canvas.width,
-        ((evt.clientY - rect.top) / (rect.bottom - rect.top)) * canvas.height,
-      ];
+    
+    // Functions to create different demo images
+    function createCheckerboardImage() {
+      const imageCanvas = document.createElement("canvas");
+      imageCanvas.width = 200;
+      imageCanvas.height = 200;
+      const ctx = imageCanvas.getContext("2d");
+      
+      // Draw a black and white checkerboard
+      const squareSize = 20;
+      ctx.fillStyle = "white";
+      ctx.fillRect(0, 0, 200, 200);
+      
+      for (let y = 0; y < 200; y += squareSize) {
+        for (let x = 0; x < 200; x += squareSize) {
+          if ((x / squareSize + y / squareSize) % 2 === 0) {
+            ctx.fillStyle = "black";
+            ctx.fillRect(x, y, squareSize, squareSize);
+          }
+        }
+      }
+      
+      return imageCanvas;
     }
-  
-    function clearCanvas() {
+    
+    function createGridPatternImage() {
+      const imageCanvas = document.createElement("canvas");
+      imageCanvas.width = 200;
+      imageCanvas.height = 200;
+      const ctx = imageCanvas.getContext("2d");
+      
+      // Fill with light color
+      ctx.fillStyle = "#f8f9fa";
+      ctx.fillRect(0, 0, 200, 200);
+      
+      // Draw grid lines
+      ctx.strokeStyle = "#6c757d";
+      ctx.lineWidth = 1;
+      
+      // Vertical lines
+      for (let x = 0; x <= 200; x += 20) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, 200);
+        ctx.stroke();
+      }
+      
+      // Horizontal lines
+      for (let y = 0; y <= 200; y += 20) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(200, y);
+        ctx.stroke();
+      }
+      
+      // Draw colored squares at intersections
+      for (let y = 20; y < 200; y += 40) {
+        for (let x = 20; x < 200; x += 40) {
+          ctx.fillStyle = `hsl(${(x + y) % 360}, 70%, 60%)`;
+          ctx.fillRect(x - 5, y - 5, 10, 10);
+        }
+      }
+      
+      return imageCanvas;
+    }
+    
+    function createCirclePatternImage() {
+      const imageCanvas = document.createElement("canvas");
+      imageCanvas.width = 200;
+      imageCanvas.height = 200;
+      const ctx = imageCanvas.getContext("2d");
+      
+      // Background
+      ctx.fillStyle = "#212529";
+      ctx.fillRect(0, 0, 200, 200);
+      
+      // Circles
+      for (let i = 0; i < 5; i++) {
+        const radius = 80 - i * 15;
+        ctx.fillStyle = `hsl(${i * 60}, 80%, 60%)`;
+        ctx.beginPath();
+        ctx.arc(100, 100, radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      
+      // Add some small detail circles
+      for (let i = 0; i < 20; i++) {
+        const x = Math.random() * 200;
+        const y = Math.random() * 200;
+        const radius = 2 + Math.random() * 5;
+        
+        ctx.fillStyle = `hsl(${Math.random() * 360}, 80%, 60%)`;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      
+      return imageCanvas;
+    }
+    
+    function createTextImage() {
+      const imageCanvas = document.createElement("canvas");
+      imageCanvas.width = 200;
+      imageCanvas.height = 200;
+      const ctx = imageCanvas.getContext("2d");
+      
+      // Background
+      ctx.fillStyle = "white";
+      ctx.fillRect(0, 0, 200, 200);
+      
+      // Text
+      ctx.fillStyle = "black";
+      ctx.font = "16px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText("Raster Graphics", 100, 60);
+      
+      ctx.font = "12px Arial";
+      ctx.fillText("Demonstrates pixel resizing", 100, 90);
+      
+      ctx.font = "10px Arial";
+      ctx.fillText("Notice pixelation when enlarged", 100, 120);
+      
+      ctx.font = "8px Arial";
+      ctx.fillText("Small text becomes unreadable when reduced", 100, 150);
+      
+      return imageCanvas;
+    }
+    
+    // Function to render the current image
+    function renderImage() {
+      // Clear original canvas
       originalCtx.fillStyle = "white";
       originalCtx.fillRect(0, 0, originalCanvas.width, originalCanvas.height);
-      updateResizedCanvases();
+      
+      // Draw the current image on the original canvas
+      originalCtx.drawImage(images[currentImageIndex], 0, 0);
+      
+      // Update the enlarged and reduced canvases
+      updateEnlargedCanvas();
+      updateReducedCanvas();
     }
-  
-    function updateResizedCanvases() {
+    
+    // Update the enlarged canvas with current zoom factor
+    function updateEnlargedCanvas() {
       // Clear enlarged canvas
       enlargedCtx.fillStyle = "white";
       enlargedCtx.fillRect(0, 0, enlargedCanvas.width, enlargedCanvas.height);
-  
+      
+      // Calculate new dimensions based on zoom
+      const newWidth = originalCanvas.width * zoomFactor;
+      const newHeight = originalCanvas.height * zoomFactor;
+      
+      // Center the image if it's smaller than the canvas
+      const x = (enlargedCanvas.width - newWidth) / 2;
+      const y = (enlargedCanvas.height - newHeight) / 2;
+      
+      // Disable image smoothing to maintain pixel sharpness at high zoom levels
+      enlargedCtx.imageSmoothingEnabled = false;
+      
       // Draw enlarged version
       enlargedCtx.drawImage(
         originalCanvas,
-        0,
-        0,
-        enlargedCanvas.width,
-        enlargedCanvas.height
+        x, y, newWidth, newHeight
       );
-  
+      
       // Draw pixel grid on enlarged version to show pixelation
-      const pixelSize = 8;
-      enlargedCtx.strokeStyle = "rgba(200, 200, 200, 0.3)";
-      enlargedCtx.lineWidth = 1;
-  
-      for (let x = 0; x < enlargedCanvas.width; x += pixelSize) {
-        enlargedCtx.beginPath();
-        enlargedCtx.moveTo(x, 0);
-        enlargedCtx.lineTo(x, enlargedCanvas.height);
-        enlargedCtx.stroke();
+      if (zoomFactor >= 1.5) {
+        const pixelSize = zoomFactor;
+        // Make grid lines thinner at high zoom levels
+        enlargedCtx.strokeStyle = zoomFactor > 5 
+          ? "rgba(200, 200, 200, 0.2)" 
+          : "rgba(200, 200, 200, 0.3)";
+        enlargedCtx.lineWidth = zoomFactor > 5 ? 0.5 : 1;
+        
+        // Only draw grid if zoom is high enough to see it
+        // For high zoom levels, space out the grid lines more to avoid visual clutter
+        const gridSpacing = zoomFactor > 5 ? 2 : 1;
+        
+        for (let x = 0; x < enlargedCanvas.width; x += pixelSize * gridSpacing) {
+          enlargedCtx.beginPath();
+          enlargedCtx.moveTo(x, 0);
+          enlargedCtx.lineTo(x, enlargedCanvas.height);
+          enlargedCtx.stroke();
+        }
+        
+        for (let y = 0; y < enlargedCanvas.height; y += pixelSize * gridSpacing) {
+          enlargedCtx.beginPath();
+          enlargedCtx.moveTo(0, y);
+          enlargedCtx.lineTo(enlargedCanvas.width, y);
+          enlargedCtx.stroke();
+        }
       }
-  
-      for (let y = 0; y < enlargedCanvas.height; y += pixelSize) {
-        enlargedCtx.beginPath();
-        enlargedCtx.moveTo(0, y);
-        enlargedCtx.lineTo(enlargedCanvas.width, y);
-        enlargedCtx.stroke();
+      
+      // Update label on the enlarged canvas section
+      const enlargedHeader = enlargedCanvas.closest('div').querySelector('h3');
+      if (enlargedHeader) {
+        enlargedHeader.textContent = `Enlarged (${zoomFactor.toFixed(1)}x)`;
       }
-  
+    }
+    
+    // Update the reduced canvas
+    function updateReducedCanvas() {
       // Clear reduced canvas
       reducedCtx.fillStyle = "white";
       reducedCtx.fillRect(0, 0, reducedCanvas.width, reducedCanvas.height);
-  
+      
       // Draw reduced version
       reducedCtx.drawImage(
         originalCanvas,
-        0,
-        0,
-        reducedCanvas.width,
-        reducedCanvas.height
+        0, 0, reducedCanvas.width, reducedCanvas.height
       );
     }
   }
