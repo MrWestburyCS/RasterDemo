@@ -1,0 +1,1873 @@
+﻿document.addEventListener("DOMContentLoaded", function () {
+    // Initialize all interactive components
+    initPixelCreator();
+    initResizingDemo();
+    initSamplingDemo();
+    initColorDepthDemo();
+  
+    // Smooth scrolling for navigation links
+    document.querySelectorAll('a[href^="#"]').forEach((anchor) => {
+      anchor.addEventListener("click", function (e) {
+        e.preventDefault();
+        document.querySelector(this.getAttribute("href")).scrollIntoView({
+          behavior: "smooth",
+        });
+      });
+    });
+  });
+  
+  function setupGridContainers() {
+    // Style for main grid container
+    const pixelGridContainer = document.querySelector(".pixel-grid-container");
+    if (pixelGridContainer) {
+      pixelGridContainer.style.overflow = "hidden";
+      pixelGridContainer.style.position = "relative";
+      pixelGridContainer.style.width = "440px"; // Accounting for axes
+      pixelGridContainer.style.height = "440px";
+    }
+    
+    // Style for binary grid container
+    const binaryGridWrapper = document.querySelector(".binary-grid-wrapper");
+    if (binaryGridWrapper) {
+      binaryGridWrapper.style.overflow = "hidden";
+      binaryGridWrapper.style.position = "relative";
+      binaryGridWrapper.style.width = "440px"; // Accounting for axes
+      binaryGridWrapper.style.height = "440px";
+    }
+  }
+  
+  // Call this function after creating both grids
+  setupGridContainers();
+
+
+  // ===== Pixel Creator Section =====
+  function initPixelCreator() {
+    const gridContainer = document.getElementById("pixel-grid");
+    const gridSizeSelect = document.getElementById("grid-size");
+    const colorPicker = document.getElementById("pixel-color");
+    const clearButton = document.getElementById("clear-grid");
+    const downloadButton = document.getElementById("download-image");
+    
+    // New buttons for undo/redo
+    const undoButton = document.getElementById("undo-button");
+    const redoButton = document.getElementById("redo-button");
+    
+    // New buttons for zoom/pan
+    const zoomInButton = document.getElementById("zoom-in");
+    const zoomOutButton = document.getElementById("zoom-out");
+    const resetViewButton = document.getElementById("reset-view");
+    
+    let isDrawing = false;
+    let currentSize = parseInt(gridSizeSelect.value);
+    let currentColor = colorPicker.value;
+    
+    // History for undo/redo
+    let history = [];
+    let historyIndex = -1;
+    
+    // Zoom/pan state for main grid
+    let scale = 1;
+    let panX = 0;
+    let panY = 0;
+    let isPanning = false;
+    let startPanX = 0;
+    let startPanY = 0;
+    
+    // Separate zoom/pan state for binary grid
+    let binaryScale = 1;
+    let binaryPanX = 0;
+    let binaryPanY = 0;
+    let isBinaryPanning = false;
+    let startBinaryPanX = 0;
+    let startBinaryPanY = 0;
+    
+    // Reference to binary grid with axes - define it here
+    let binaryGridWithAxes = null;
+    
+    // Unique colors for file size calculation
+    let uniqueColors = new Set(["white"]);
+  
+    // Create initial grid
+    createGrid(currentSize);
+  
+    // Event Listeners
+    gridSizeSelect.addEventListener("change", () => {
+      if (confirm("Changing grid size will clear your current work. Continue?")) {
+        currentSize = parseInt(gridSizeSelect.value);
+        createGrid(currentSize);
+        resetHistory();
+      } else {
+        gridSizeSelect.value = currentSize;
+      }
+    });
+  
+    colorPicker.addEventListener("input", () => {
+      currentColor = colorPicker.value;
+    });
+  
+    clearButton.addEventListener("click", () => {
+      if (confirm("Clear the entire grid?")) {
+        createGrid(currentSize);
+        resetHistory();
+      }
+    });
+  
+    downloadButton.addEventListener("click", downloadPixelArt);
+  
+    gridContainer.addEventListener("mousedown", (e) => {
+      // Only start drawing on left click without space modifier
+      if (e.button === 0 && !e.getModifierState("Space")) {
+        isDrawing = true;
+      }
+      
+      // For panning with middle mouse or space+left click
+      if (e.button === 1 || (e.button === 0 && e.getModifierState("Space"))) {
+        e.preventDefault();
+        e.stopPropagation();
+        isPanning = true;
+        startPanX = e.clientX - panX;
+        startPanY = e.clientY - panY;
+        gridContainer.style.cursor = "grabbing";
+        
+        // Add temporary event listeners for this panning session
+        document.addEventListener("mousemove", handleMainPanMove);
+        document.addEventListener("mouseup", handleMainPanEnd);
+      }
+    });
+    
+    // Add back the drawing event listeners that were lost
+    gridContainer.addEventListener("mouseup", stopDrawing);
+    gridContainer.addEventListener("mouseleave", stopDrawing);
+    
+    // Undo/Redo buttons
+    undoButton.addEventListener("click", undo);
+    redoButton.addEventListener("click", redo);
+    
+    // Keyboard shortcuts for undo/redo
+    document.addEventListener("keydown", (e) => {
+      // Check if focus is not in an input field
+      if (document.activeElement.tagName !== "INPUT") {
+        if (e.ctrlKey && e.key === "z") {
+          e.preventDefault();
+          undo();
+        } else if (e.ctrlKey && e.key === "y") {
+          e.preventDefault();
+          redo();
+        }
+      }
+    });
+    
+    // Zoom/Pan buttons
+    zoomInButton.addEventListener("click", () => {
+      zoomGrid(1.2, true);
+    });
+    
+    zoomOutButton.addEventListener("click", () => {
+      zoomGrid(0.8, true);
+    });
+    
+    resetViewButton.addEventListener("click", () => {
+      resetView(true);
+    });
+    
+    // Mouse wheel zoom for both grids
+    gridContainer.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+      zoomGrid(zoomFactor, true);
+    });
+    
+    // Pan functionality
+    document.addEventListener("keydown", (e) => {
+      if (e.code === "Space") {
+        // Prevent default scrolling behavior with capture phase
+        e.preventDefault();
+        e.stopPropagation();
+        
+        gridContainer.style.cursor = "grab";
+        
+        // Also update cursor for binary grid
+        const binaryGridWithAxes = document.querySelector('.binary-grid-with-axes');
+        if (binaryGridWithAxes) {
+          binaryGridWithAxes.style.cursor = "grab";
+        }
+      }
+    });
+    
+    document.addEventListener("keyup", (e) => {
+      if (e.code === "Space") {
+        gridContainer.style.cursor = "default";
+        
+        // Also update cursor for binary grid
+        const binaryGridWithAxes = document.querySelector('.binary-grid-with-axes');
+        if (binaryGridWithAxes) {
+          binaryGridWithAxes.style.cursor = "default";
+        }
+      }
+    });
+    
+    // Helper function for main grid panning - mousemove
+    function handleMainPanMove(e) {
+      if (isPanning) {
+        e.preventDefault();
+        panX = e.clientX - startPanX;
+        panY = e.clientY - startPanY;
+        applyTransform();
+      }
+    }
+    
+    // Helper function for main grid panning - mouseup
+    function handleMainPanEnd(e) {
+      if (isPanning) {
+        e.preventDefault();
+        isPanning = false;
+        gridContainer.style.cursor = e.getModifierState("Space") ? "grab" : "default";
+        
+        // Remove the temporary event listeners
+        document.removeEventListener("mousemove", handleMainPanMove);
+        document.removeEventListener("mouseup", handleMainPanEnd);
+      }
+    }
+  
+    // Pan functionality for binary grid - only call after binaryGridWithAxes is set
+    if (binaryGridWithAxes) {
+  // Binary grid panning is now handled directly in the createGrid function
+    }
+  
+    function createGrid(size) {
+      gridContainer.innerHTML = "";
+      gridContainer.style.gridTemplateColumns = `repeat(${size}, 1fr)`;
+      gridContainer.style.gridTemplateRows = `repeat(${size}, 1fr)`;
+    
+      // Fixed size container
+      gridContainer.style.width = "400px";
+      gridContainer.style.height = "400px";
+      
+      // Reset uniqueColors
+      uniqueColors = new Set(["white"]);
+      
+      // Get the parent container and interactive area
+      const pixelGridContainer = document.querySelector(".pixel-grid-container");
+      const interactiveArea = pixelGridContainer.closest(".interactive-area");
+      
+      // Clear existing content
+      pixelGridContainer.innerHTML = "";
+      
+      // Remove any existing binary grid
+      const existingBinaryGrid = interactiveArea.querySelector(".binary-section");
+      if (existingBinaryGrid) {
+        existingBinaryGrid.remove();
+      }
+      
+      // Create x-axis labels (top)
+      const xAxisTop = document.createElement("div");
+      xAxisTop.className = "axis x-axis-top";
+      xAxisTop.style.display = "grid";
+      xAxisTop.style.gridTemplateColumns = `repeat(${size}, 1fr)`;
+      xAxisTop.style.width = "400px";
+      xAxisTop.style.height = "20px";
+      
+      for (let i = 0; i < size; i++) {
+        const label = document.createElement("div");
+        label.className = "axis-label";
+        label.textContent = i;
+        xAxisTop.appendChild(label);
+      }
+      
+      // Create y-axis labels (left)
+      const yAxisLeft = document.createElement("div");
+      yAxisLeft.className = "axis y-axis-left";
+      yAxisLeft.style.display = "grid";
+      yAxisLeft.style.gridTemplateRows = `repeat(${size}, 1fr)`;
+      yAxisLeft.style.width = "20px";
+      yAxisLeft.style.height = "400px";
+      
+      for (let i = 0; i < size; i++) {
+        const label = document.createElement("div");
+        label.className = "axis-label";
+        label.textContent = i;
+        yAxisLeft.appendChild(label);
+      }
+      
+      // Create grid with axes
+      const gridWithAxes = document.createElement("div");
+      gridWithAxes.className = "grid-with-axes";
+      
+      const gridRow = document.createElement("div");
+      gridRow.style.display = "flex";
+      gridRow.style.flexDirection = "row";
+      
+      // Add the elements to the DOM
+      gridRow.appendChild(yAxisLeft);
+      gridRow.appendChild(gridContainer);
+      
+      gridWithAxes.appendChild(xAxisTop);
+      gridWithAxes.appendChild(gridRow);
+      
+      // Add the grid with axes to the pixel grid container
+      pixelGridContainer.appendChild(gridWithAxes);
+      
+      // Create binary representation grid
+      const binaryGridContainer = document.createElement("div");
+      binaryGridContainer.id = "binary-grid";
+      binaryGridContainer.className = "binary-grid pixel-grid";
+      binaryGridContainer.style.width = "400px";
+      binaryGridContainer.style.height = "400px";
+      binaryGridContainer.style.display = "grid";
+      binaryGridContainer.style.gridTemplateColumns = `repeat(${size}, 1fr)`;
+      binaryGridContainer.style.gridTemplateRows = `repeat(${size}, 1fr)`;
+      binaryGridContainer.style.gap = "1px";
+      binaryGridContainer.style.backgroundColor = "#ddd";
+      binaryGridContainer.style.border = "1px solid #ccc";
+      
+      // First, create a container for both title, controls and grid
+      const binarySection = document.createElement("div");
+      binarySection.className = "binary-section";
+      binarySection.style.marginTop = "30px";
+      binarySection.style.display = "flex";
+      binarySection.style.flexDirection = "column";
+      binarySection.style.alignItems = "center";
+      
+      // Add binary grid title (outside the wrapper)
+      const binaryTitle = document.createElement("div");
+      binaryTitle.textContent = "Binary Representation";
+      binaryTitle.style.fontWeight = "bold";
+      binaryTitle.style.marginBottom = "10px";
+      binaryTitle.style.textAlign = "center";
+      binarySection.appendChild(binaryTitle);
+      
+      // Create binary controls div (will be populated later)
+      const binaryControls = document.createElement("div");
+      binaryControls.className = "binary-controls";
+      binaryControls.style.display = "flex";
+      binaryControls.style.gap = "0.5rem";
+      binaryControls.style.marginBottom = "10px";
+      binaryControls.style.justifyContent = "center";
+      binarySection.appendChild(binaryControls);
+      
+      // Create x-axis labels for binary grid
+      const binaryXAxisTop = document.createElement("div");
+      binaryXAxisTop.className = "axis x-axis-top";
+      binaryXAxisTop.style.display = "grid";
+      binaryXAxisTop.style.gridTemplateColumns = `repeat(${size}, 1fr)`;
+      binaryXAxisTop.style.width = "400px";
+      binaryXAxisTop.style.height = "20px";
+      
+      for (let i = 0; i < size; i++) {
+        const label = document.createElement("div");
+        label.className = "axis-label";
+        label.textContent = i;
+        binaryXAxisTop.appendChild(label);
+      }
+      
+      // Create y-axis labels for binary grid
+      const binaryYAxisLeft = document.createElement("div");
+      binaryYAxisLeft.className = "axis y-axis-left";
+      binaryYAxisLeft.style.display = "grid";
+      binaryYAxisLeft.style.gridTemplateRows = `repeat(${size}, 1fr)`;
+      binaryYAxisLeft.style.width = "20px";
+      binaryYAxisLeft.style.height = "400px";
+      
+      for (let i = 0; i < size; i++) {
+        const label = document.createElement("div");
+        label.className = "axis-label";
+        label.textContent = i;
+        binaryYAxisLeft.appendChild(label);
+      }
+      
+      // Create grid with axes for binary grid
+      binaryGridWithAxes = document.createElement("div");
+      binaryGridWithAxes.className = "grid-with-axes binary-grid-with-axes";
+      
+      const binaryGridRow = document.createElement("div");
+      binaryGridRow.style.display = "flex";
+      binaryGridRow.style.flexDirection = "row";
+      
+      // Add the elements to the DOM
+      binaryGridRow.appendChild(binaryYAxisLeft);
+      binaryGridRow.appendChild(binaryGridContainer);
+      
+      binaryGridWithAxes.appendChild(binaryXAxisTop);
+      binaryGridWithAxes.appendChild(binaryGridRow);
+      
+      // Now create the wrapper that will only contain the grid
+      const binaryGridWrapper = document.createElement("div");
+      binaryGridWrapper.className = "binary-grid-wrapper pixel-grid-container";
+      binaryGridWrapper.style.width = "440px";
+      binaryGridWrapper.style.height = "440px";
+      binaryGridWrapper.style.overflow = "hidden";
+      binaryGridWrapper.style.position = "relative";
+      binaryGridWrapper.style.margin = "0 auto";
+      
+      // Add the binary grid with axes to the wrapper
+      binaryGridWrapper.appendChild(binaryGridWithAxes);
+      
+      // Add the wrapper to the binary section
+      binarySection.appendChild(binaryGridWrapper);
+      
+      // Add the complete binary section to the interactive area
+      interactiveArea.appendChild(binarySection);
+      
+      // Create pixels for both grids
+      for (let i = 0; i < size * size; i++) {
+        // Create pixel for main grid
+        const pixel = document.createElement("div");
+        pixel.classList.add("pixel");
+        pixel.dataset.index = i;
+        pixel.style.backgroundColor = "white";
+        pixel.addEventListener("mousedown", (e) => {
+          // Only draw on left click
+          if (e.button === 0 && !e.getModifierState("Space")) {
+            colorPixel(e);
+          }
+        });
+        pixel.addEventListener("mouseover", (e) => {
+          if (isDrawing) colorPixel(e);
+        });
+        gridContainer.appendChild(pixel);
+        
+        // Create corresponding binary pixel
+        const binaryPixel = document.createElement("div");
+        binaryPixel.classList.add("binary-pixel");
+        binaryPixel.dataset.index = i;
+        binaryPixel.style.backgroundColor = "white";
+        binaryPixel.style.fontSize = "8px";
+        binaryPixel.style.overflow = "hidden";
+        binaryPixel.style.display = "flex";
+        binaryPixel.style.justifyContent = "center";
+        binaryPixel.style.alignItems = "center";
+        binaryPixel.style.textAlign = "center";
+        binaryPixel.style.wordBreak = "break-all";
+        binaryPixel.textContent = "00000000";
+        binaryGridContainer.appendChild(binaryPixel);
+      }
+      
+      // Add binary zoom controls
+      addBinaryGridControls();
+      
+      // Fix: Directly add panning functionality to the binary grid
+      if (binaryGridWithAxes) {
+        // Add wheel zoom
+        binaryGridWithAxes.addEventListener("wheel", (e) => {
+          e.preventDefault();
+          const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+          zoomGrid(zoomFactor, false);
+        });
+        
+        // Add middle mouse button and space+left button panning
+        binaryGridWithAxes.addEventListener("mousedown", (e) => {
+          // Prevent default for middle mouse button (important!)
+          if (e.button === 1) {
+            e.preventDefault();
+          }
+          
+          if (e.button === 1 || (e.button === 0 && e.getModifierState("Space"))) {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            isBinaryPanning = true;
+            startBinaryPanX = e.clientX - binaryPanX;
+            startBinaryPanY = e.clientY - binaryPanY;
+            binaryGridWithAxes.style.cursor = "grabbing";
+            
+            // Define the handlers so we can remove them later
+            const mouseMoveHandler = (e) => {
+              if (isBinaryPanning) {
+                e.preventDefault();
+                binaryPanX = e.clientX - startBinaryPanX;
+                binaryPanY = e.clientY - startBinaryPanY;
+                applyBinaryTransform();
+              }
+            };
+            
+            const mouseUpHandler = () => {
+              if (isBinaryPanning) {
+                isBinaryPanning = false;
+                binaryGridWithAxes.style.cursor = e.getModifierState("Space") ? "grab" : "default";
+                
+                // Remove the event listeners when we're done panning
+                document.removeEventListener("mousemove", mouseMoveHandler);
+                document.removeEventListener("mouseup", mouseUpHandler);
+              }
+            };
+            
+            // Add listeners for panning
+            document.addEventListener("mousemove", mouseMoveHandler);
+            document.addEventListener("mouseup", mouseUpHandler);
+          }
+        });
+      }
+      
+      resetView(true);  // Reset main grid view
+      resetView(false); // Reset binary grid view
+    }
+    
+    function addBinaryGridControls() {
+      // Find the binary controls container
+      const binaryControls = document.querySelector(".binary-controls");
+      if (binaryControls) {
+        // Clear existing controls if needed
+        binaryControls.innerHTML = '';
+        
+        // Create binary grid zoom buttons
+        const binaryZoomInButton = document.createElement("button");
+        binaryZoomInButton.textContent = "Zoom In";
+        binaryZoomInButton.className = "button";
+        binaryZoomInButton.addEventListener("click", () => {
+          zoomGrid(1.2, false);
+        });
+        
+        const binaryZoomOutButton = document.createElement("button");
+        binaryZoomOutButton.textContent = "Zoom Out";
+        binaryZoomOutButton.className = "button";
+        binaryZoomOutButton.addEventListener("click", () => {
+          zoomGrid(0.8, false);
+        });
+        
+        const binaryResetViewButton = document.createElement("button");
+        binaryResetViewButton.textContent = "Reset View";
+        binaryResetViewButton.className = "button";
+        binaryResetViewButton.addEventListener("click", () => {
+          resetView(false);
+        });
+        
+        // Add buttons to the controls
+        binaryControls.appendChild(binaryZoomInButton);
+        binaryControls.appendChild(binaryZoomOutButton);
+        binaryControls.appendChild(binaryResetViewButton);
+      }
+    }
+    
+    function startDrawing(e) {
+      // Only start drawing on left click
+      if (e.button === 0 && !e.getModifierState("Space")) {
+        isDrawing = true;
+      }
+    }
+    
+    function stopDrawing() {
+      isDrawing = false;
+    }
+  
+    function colorPixel(e) {
+      const oldColor = e.target.style.backgroundColor;
+      if (oldColor === currentColor) return; // No change
+      
+      // Add to history
+      addToHistory({
+        index: parseInt(e.target.dataset.index),
+        oldColor: oldColor || "white",
+        newColor: currentColor
+      });
+      
+      e.target.style.backgroundColor = currentColor;
+      uniqueColors.add(currentColor);
+      
+      // Update binary representation
+      updateBinaryPixel(parseInt(e.target.dataset.index), currentColor);
+    }
+    
+    function updateBinaryPixel(index, color) {
+      const binaryPixel = document.querySelector(`.binary-pixel[data-index="${index}"]`);
+      if (!binaryPixel) return;
+      
+      // Convert color to binary
+      let binaryValue = "";
+      
+      if (color === "white" || color === "") {
+        binaryValue = "00000000";
+        // For white pixels, show 0s as black text on white background
+        binaryPixel.style.backgroundColor = "white";
+        binaryPixel.style.color = "black";
+      } else {
+        // Parse the color to get RGB values
+        let r, g, b;
+        
+        if (color.startsWith("rgb")) {
+          // Parse rgb(r, g, b) format
+          const match = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+          if (match) {
+            r = parseInt(match[1]);
+            g = parseInt(match[2]);
+            b = parseInt(match[3]);
+          }
+        } else {
+          // Parse hex format by creating a temporary element
+          const tempElem = document.createElement("div");
+          tempElem.style.color = color;
+          document.body.appendChild(tempElem);
+          const computedColor = getComputedStyle(tempElem).color;
+          document.body.removeChild(tempElem);
+          
+          // Now parse the computed rgb value
+          const match = computedColor.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+          if (match) {
+            r = parseInt(match[1]);
+            g = parseInt(match[2]);
+            b = parseInt(match[3]);
+          }
+        }
+        
+        // Convert to binary (simplified to 8 bits total)
+        if (r !== undefined && g !== undefined && b !== undefined) {
+          // Use 3 bits for red, 3 bits for green, 2 bits for blue (8 bits total)
+          const rBinary = Math.round(r / 255 * 7).toString(2).padStart(3, '0');
+          const gBinary = Math.round(g / 255 * 7).toString(2).padStart(3, '0');
+          const bBinary = Math.round(b / 255 * 3).toString(2).padStart(2, '0');
+          binaryValue = rBinary + gBinary + bBinary;
+        } else {
+          binaryValue = "00000000";
+        }
+        
+        // For colored pixels, set text color for readability
+        binaryPixel.style.backgroundColor = color;
+        binaryPixel.style.color = isColorDark(color) ? "white" : "black";
+      }
+      
+      // Display 0s as black and 1s in highlighted color
+      let formattedBinary = "";
+      for (let i = 0; i < binaryValue.length; i++) {
+        const bit = binaryValue[i];
+        if (bit === "1") {
+          formattedBinary += `<span style="font-weight:bold;color:${binaryPixel.style.color === "white" ? "white" : "blue"}">1</span>`;
+        } else {
+          formattedBinary += `<span>0</span>`;
+        }
+      }
+      
+      binaryPixel.innerHTML = formattedBinary;
+    }
+    
+    function isColorDark(color) {
+      // Create a temporary element to compute the color
+      const tempElem = document.createElement("div");
+      tempElem.style.color = color;
+      document.body.appendChild(tempElem);
+      const computedColor = getComputedStyle(tempElem).color;
+      document.body.removeChild(tempElem);
+      
+      // Parse the RGB values
+      const match = computedColor.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+      if (match) {
+        const r = parseInt(match[1]);
+        const g = parseInt(match[2]);
+        const b = parseInt(match[3]);
+        
+        // Calculate relative luminance
+        const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+        return luminance < 128;
+      }
+      
+      return false;
+    }
+    
+    function undo() {
+      if (historyIndex >= 0) {
+        const action = history[historyIndex];
+        const pixel = gridContainer.children[action.index];
+        pixel.style.backgroundColor = action.oldColor;
+        
+        // Update binary representation
+        updateBinaryPixel(action.index, action.oldColor);
+        
+        historyIndex--;
+        updateUndoRedoButtons();
+        updateColorSet();
+      }
+    }
+    
+    function redo() {
+      if (historyIndex < history.length - 1) {
+        historyIndex++;
+        const action = history[historyIndex];
+        const pixel = gridContainer.children[action.index];
+        pixel.style.backgroundColor = action.newColor;
+        
+        // Update binary representation
+        updateBinaryPixel(action.index, action.newColor);
+        
+        updateUndoRedoButtons();
+        updateColorSet();
+      }
+    }
+    
+    function addToHistory(action) {
+      // If we did some undos and then a new action, discard the "future" actions
+      if (historyIndex < history.length - 1) {
+        history = history.slice(0, historyIndex + 1);
+      }
+      
+      history.push(action);
+      historyIndex = history.length - 1;
+      updateUndoRedoButtons();
+    }
+    
+    function resetHistory() {
+      history = [];
+      historyIndex = -1;
+      updateUndoRedoButtons();
+    }
+    
+    function updateUndoRedoButtons() {
+      undoButton.disabled = historyIndex < 0;
+      redoButton.disabled = historyIndex >= history.length - 1;
+    }
+    
+    function updateColorSet() {
+      // Recalculate unique colors after undo/redo
+      uniqueColors = new Set();
+      for (let i = 0; i < gridContainer.children.length; i++) {
+        const color = gridContainer.children[i].style.backgroundColor || "white";
+        uniqueColors.add(color);
+      }
+    }
+    
+    function zoomGrid(factor, isMainGrid) {
+      if (isMainGrid) {
+        scale *= factor;
+        scale = Math.min(Math.max(scale, 0.2), 5); // Limit zoom between 0.2x and 5x
+        applyTransform();
+      } else {
+        binaryScale *= factor;
+        binaryScale = Math.min(Math.max(binaryScale, 0.2), 5); // Limit zoom between 0.2x and 5x
+        applyBinaryTransform();
+      }
+    }
+    
+    function applyTransform() {
+      // Find the grid-with-axes element that contains the grid
+      const gridWithAxes = gridContainer.closest('.grid-with-axes');
+      if (gridWithAxes) {
+        gridWithAxes.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+        gridWithAxes.style.transformOrigin = "center";
+      } else {
+        // Fallback to the old behavior if grid-with-axes is not found
+        gridContainer.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+        gridContainer.style.transformOrigin = "center";
+      }
+    }
+    
+    function applyBinaryTransform() {
+      // Apply transform to binary grid with axes
+      const binaryGridWithAxes = document.querySelector('.binary-grid-with-axes');
+      if (binaryGridWithAxes) {
+        binaryGridWithAxes.style.transform = `translate(${binaryPanX}px, ${binaryPanY}px) scale(${binaryScale})`;
+        binaryGridWithAxes.style.transformOrigin = "center";
+        
+        // Set the overflow on the parent container to ensure it doesn't expand
+        const binaryGridWrapper = binaryGridWithAxes.closest('.binary-grid-wrapper');
+        if (binaryGridWrapper) {
+          binaryGridWrapper.style.overflow = "hidden";
+          binaryGridWrapper.style.position = "relative";
+        }
+      }
+    }
+    
+    
+    function resetView(isMainGrid) {
+      if (isMainGrid) {
+        scale = 1;
+        panX = 0;
+        panY = 0;
+        applyTransform();
+      } else {
+        binaryScale = 1;
+        binaryPanX = 0;
+        binaryPanY = 0;
+        applyBinaryTransform();
+      }
+    }
+  
+    function downloadPixelArt() {
+      // Create a canvas of the pixel art
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      const size = currentSize;
+      const pixelSize = 400 / size;
+  
+      canvas.width = 400;
+      canvas.height = 400;
+  
+      // Fill canvas with white background
+      ctx.fillStyle = "white";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+  
+      // Draw each pixel
+      const pixels = document.querySelectorAll(".pixel");
+      pixels.forEach((pixel, index) => {
+        const row = Math.floor(index / size);
+        const col = index % size;
+        ctx.fillStyle = pixel.style.backgroundColor || "white";
+        ctx.fillRect(col * pixelSize, row * pixelSize, pixelSize, pixelSize);
+      });
+  
+      // Create download link
+      const link = document.createElement("a");
+      link.download = "pixel-art.png";
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    }
+  }
+  
+  // ===== Resizing Demo Section =====
+  function initResizingDemo() {
+    const originalCanvas = document.getElementById("original-canvas");
+    const enlargedCanvas = document.getElementById("enlarged-canvas");
+    const reducedCanvas = document.getElementById("reduced-canvas");
+    const colorPicker = document.getElementById("resize-color-picker");
+    const clearButton = document.getElementById("clear-original");
+  
+    const originalCtx = originalCanvas.getContext("2d");
+    const enlargedCtx = enlargedCanvas.getContext("2d");
+    const reducedCtx = reducedCanvas.getContext("2d");
+  
+    // Initialize canvases
+    originalCtx.fillStyle = "white";
+    originalCtx.fillRect(0, 0, originalCanvas.width, originalCanvas.height);
+  
+    enlargedCtx.fillStyle = "white";
+    enlargedCtx.fillRect(0, 0, enlargedCanvas.width, enlargedCanvas.height);
+  
+    reducedCtx.fillStyle = "white";
+    reducedCtx.fillRect(0, 0, reducedCanvas.width, reducedCanvas.height);
+  
+    // Variables for drawing
+    let isDrawing = false;
+    let currentColor = colorPicker.value;
+    let lastX = 0;
+    let lastY = 0;
+  
+    // Event listeners
+    colorPicker.addEventListener("input", () => {
+      currentColor = colorPicker.value;
+    });
+  
+    clearButton.addEventListener("click", clearCanvas);
+  
+    originalCanvas.addEventListener("mousedown", startDrawing);
+    originalCanvas.addEventListener("mousemove", draw);
+    originalCanvas.addEventListener("mouseup", stopDrawing);
+    originalCanvas.addEventListener("mouseout", stopDrawing);
+  
+    function startDrawing(e) {
+      isDrawing = true;
+      [lastX, lastY] = getMousePos(originalCanvas, e);
+    }
+  
+    function draw(e) {
+      if (!isDrawing) return;
+  
+      const [x, y] = getMousePos(originalCanvas, e);
+  
+      // Draw on original canvas
+      originalCtx.strokeStyle = currentColor;
+      originalCtx.lineWidth = 3;
+      originalCtx.lineCap = "round";
+      originalCtx.beginPath();
+      originalCtx.moveTo(lastX, lastY);
+      originalCtx.lineTo(x, y);
+      originalCtx.stroke();
+  
+      lastX = x;
+      lastY = y;
+  
+      // Update resized versions
+      updateResizedCanvases();
+    }
+  
+    function stopDrawing() {
+      isDrawing = false;
+    }
+  
+    function getMousePos(canvas, evt) {
+      const rect = canvas.getBoundingClientRect();
+      return [
+        ((evt.clientX - rect.left) / (rect.right - rect.left)) * canvas.width,
+        ((evt.clientY - rect.top) / (rect.bottom - rect.top)) * canvas.height,
+      ];
+    }
+  
+    function clearCanvas() {
+      originalCtx.fillStyle = "white";
+      originalCtx.fillRect(0, 0, originalCanvas.width, originalCanvas.height);
+      updateResizedCanvases();
+    }
+  
+    function updateResizedCanvases() {
+      // Clear enlarged canvas
+      enlargedCtx.fillStyle = "white";
+      enlargedCtx.fillRect(0, 0, enlargedCanvas.width, enlargedCanvas.height);
+  
+      // Draw enlarged version
+      enlargedCtx.drawImage(
+        originalCanvas,
+        0,
+        0,
+        enlargedCanvas.width,
+        enlargedCanvas.height
+      );
+  
+      // Draw pixel grid on enlarged version to show pixelation
+      const pixelSize = 8;
+      enlargedCtx.strokeStyle = "rgba(200, 200, 200, 0.3)";
+      enlargedCtx.lineWidth = 1;
+  
+      for (let x = 0; x < enlargedCanvas.width; x += pixelSize) {
+        enlargedCtx.beginPath();
+        enlargedCtx.moveTo(x, 0);
+        enlargedCtx.lineTo(x, enlargedCanvas.height);
+        enlargedCtx.stroke();
+      }
+  
+      for (let y = 0; y < enlargedCanvas.height; y += pixelSize) {
+        enlargedCtx.beginPath();
+        enlargedCtx.moveTo(0, y);
+        enlargedCtx.lineTo(enlargedCanvas.width, y);
+        enlargedCtx.stroke();
+      }
+  
+      // Clear reduced canvas
+      reducedCtx.fillStyle = "white";
+      reducedCtx.fillRect(0, 0, reducedCanvas.width, reducedCanvas.height);
+  
+      // Draw reduced version
+      reducedCtx.drawImage(
+        originalCanvas,
+        0,
+        0,
+        reducedCanvas.width,
+        reducedCanvas.height
+      );
+    }
+  }
+  
+  // ===== Sampling Demo Section =====
+  function initSamplingDemo() {
+    const samplingCanvas = document.getElementById("sampling-canvas");
+    const resolutionSlider = document.getElementById("resolution-slider");
+    const resolutionValue = document.getElementById("resolution-value");
+    const samplingTechnique = document.getElementById("sampling-technique");
+    const animationToggle = document.getElementById("animation-toggle");
+    const showFilterInfo = document.getElementById("show-filter-info");
+    const sourceImage = document.getElementById("source-image");
+  
+    // Set up resolution slider
+    resolutionSlider.min = 8;
+    resolutionSlider.max = 256;
+    resolutionSlider.value = 32;
+  
+    // Create a canvas for the continuous function visualization
+    const continuousCanvas = document.createElement("canvas");
+    continuousCanvas.width = 400;
+    continuousCanvas.height = 400;
+    const continuousCtx = continuousCanvas.getContext("2d");
+    
+    // Add image source options
+    const imageSourceSelect = document.createElement("select");
+    imageSourceSelect.id = "image-source";
+    imageSourceSelect.innerHTML = `
+      <option value="generated">Generated Scene</option>
+      <option value="photo1">Nature Photo</option>
+      <option value="photo2">City Photo</option>
+      <option value="photo3">Portrait Photo</option>
+    `;
+    
+    // Insert the select element before the resolution slider
+    const controlGroup = document.createElement("div");
+    controlGroup.className = "control-group";
+    const label = document.createElement("label");
+    label.htmlFor = "image-source";
+    label.textContent = "Image Source:";
+    controlGroup.appendChild(label);
+    controlGroup.appendChild(imageSourceSelect);
+    
+    const firstControlGroup = samplingTechnique.parentElement.parentElement.querySelector(".control-group");
+    firstControlGroup.parentElement.insertBefore(controlGroup, firstControlGroup);
+    
+    // Add resolution preset buttons
+    const presetGroup = document.createElement("div");
+    presetGroup.className = "control-group";
+    
+    // Low resolution button
+    const lowResButton = document.createElement("button");
+    lowResButton.textContent = "Low Res (16Ã—16)";
+    lowResButton.addEventListener("click", () => {
+      resolutionSlider.value = 16;
+      currentResolution = 16;
+      resolutionValue.textContent = "16Ã—16";
+      renderSampledImage(currentResolution, currentTechnique);
+    });
+    
+    // Medium resolution button
+    const medResButton = document.createElement("button");
+    medResButton.textContent = "Medium Res (64Ã—64)";
+    medResButton.addEventListener("click", () => {
+      resolutionSlider.value = 64;
+      currentResolution = 64;
+      resolutionValue.textContent = "64Ã—64";
+      renderSampledImage(currentResolution, currentTechnique);
+    });
+    
+    // High resolution button
+    const highResButton = document.createElement("button");
+    highResButton.textContent = "High Res (256Ã—256)";
+    highResButton.addEventListener("click", () => {
+      resolutionSlider.value = 256;
+      currentResolution = 256;
+      resolutionValue.textContent = "256Ã—256";
+      renderSampledImage(currentResolution, currentTechnique);
+    });
+    
+    presetGroup.appendChild(document.createTextNode("Presets: "));
+    presetGroup.appendChild(lowResButton);
+    presetGroup.appendChild(medResButton);
+    presetGroup.appendChild(highResButton);
+    
+    // Add preset buttons after the resolution slider
+    const resolutionGroup = resolutionSlider.parentElement;
+    resolutionGroup.parentElement.insertBefore(presetGroup, resolutionGroup.nextSibling);
+    
+    // Photo URLs
+    const photoUrls = {
+      photo1: "https://images.unsplash.com/photo-1501854140801-50d01698950b?ixlib=rb-1.2.1&auto=format&fit=crop&w=400&h=400&q=80",
+      photo2: "https://images.unsplash.com/photo-1514565131-fce0801e5785?ixlib=rb-1.2.1&auto=format&fit=crop&w=400&h=400&q=80",
+      photo3: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?ixlib=rb-1.2.1&auto=format&fit=crop&w=400&h=400&q=80"
+    };
+    
+    let currentImageSource = "generated";
+    let photoImage = new Image();
+    
+    // Use the continuous function visualization as the source image
+    drawContinuousFunction(continuousCtx, 400, 400);
+    sourceImage.src = continuousCanvas.toDataURL();
+  
+    const ctx = samplingCanvas.getContext("2d");
+    let animationId = null;
+    let isAnimating = false;
+    let currentResolution = parseInt(resolutionSlider.value);
+    let currentTechnique = samplingTechnique.value;
+  
+    // Update resolution display
+    resolutionSlider.addEventListener("input", () => {
+      currentResolution = parseInt(resolutionSlider.value);
+      resolutionValue.textContent = `${currentResolution}Ã—${currentResolution}`;
+      renderSampledImage(currentResolution, currentTechnique);
+    });
+    
+    // Update sampling technique
+    samplingTechnique.addEventListener("change", () => {
+      currentTechnique = samplingTechnique.value;
+      renderSampledImage(currentResolution, currentTechnique);
+    });
+    
+    // Update image source
+    imageSourceSelect.addEventListener("change", () => {
+      currentImageSource = imageSourceSelect.value;
+      
+      if (currentImageSource === "generated") {
+        // Use generated scene
+        drawContinuousFunction(continuousCtx, 400, 400);
+        sourceImage.src = continuousCanvas.toDataURL();
+        renderSampledImage(currentResolution, currentTechnique);
+      } else {
+        // Use photo
+        photoImage = new Image();
+        photoImage.crossOrigin = "Anonymous"; // Enable CORS
+        photoImage.onload = () => {
+          // Draw the photo to the source canvas
+          continuousCtx.clearRect(0, 0, 400, 400);
+          continuousCtx.drawImage(photoImage, 0, 0, 400, 400);
+          sourceImage.src = continuousCanvas.toDataURL();
+          renderSampledImage(currentResolution, currentTechnique);
+        };
+        photoImage.onerror = () => {
+          console.error("Error loading image");
+          // Fallback to generated scene
+          currentImageSource = "generated";
+          imageSourceSelect.value = "generated";
+          drawContinuousFunction(continuousCtx, 400, 400);
+          sourceImage.src = continuousCanvas.toDataURL();
+          renderSampledImage(currentResolution, currentTechnique);
+        };
+        photoImage.src = photoUrls[currentImageSource];
+      }
+    });
+  
+    // Show filter information
+    showFilterInfo.addEventListener("click", () => {
+      showFilterInformation();
+    });
+  
+    // Animation toggle
+    animationToggle.addEventListener("click", () => {
+      if (isAnimating) {
+        cancelAnimationFrame(animationId);
+        animationToggle.textContent = "Start Animation";
+        isAnimating = false;
+        renderSampledImage(currentResolution, currentTechnique);
+      } else {
+        animateResolution();
+        animationToggle.textContent = "Stop Animation";
+        isAnimating = true;
+      }
+    });
+  
+    // Initial render
+    renderSampledImage(currentResolution, currentTechnique);
+  
+    // Draw a continuous mathematical function
+    function drawContinuousFunction(ctx, width, height) {
+      // Instead of drawing mathematical functions, let's create a photorealistic scene
+      // that better demonstrates continuous tone and detail
+
+      // Create a natural scene with gradients, details and textures
+      
+      // Sky gradient
+      const skyGradient = ctx.createLinearGradient(0, 0, 0, height * 0.6);
+      skyGradient.addColorStop(0, "#1e3c72");
+      skyGradient.addColorStop(1, "#2a5298");
+      ctx.fillStyle = skyGradient;
+      ctx.fillRect(0, 0, width, height * 0.6);
+      
+      // Sun
+      const sunGradient = ctx.createRadialGradient(width * 0.75, height * 0.2, 0, width * 0.75, height * 0.2, width * 0.1);
+      sunGradient.addColorStop(0, "#fff9c4");
+      sunGradient.addColorStop(0.7, "#ffeb3b");
+      sunGradient.addColorStop(1, "rgba(255, 235, 59, 0)");
+      ctx.fillStyle = sunGradient;
+      ctx.beginPath();
+      ctx.arc(width * 0.75, height * 0.2, width * 0.1, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Mountains in background
+      ctx.fillStyle = "#546e7a";
+      ctx.beginPath();
+      ctx.moveTo(0, height * 0.6);
+      
+      // Create jagged mountain range
+      let x = 0;
+      while (x < width) {
+        const peakHeight = Math.random() * height * 0.2 + height * 0.1;
+        ctx.lineTo(x, height * 0.6 - peakHeight);
+        x += Math.random() * 50 + 20;
+      }
+      
+      ctx.lineTo(width, height * 0.6);
+      ctx.closePath();
+      ctx.fill();
+      
+      // Ground/grass
+      const groundGradient = ctx.createLinearGradient(0, height * 0.6, 0, height);
+      groundGradient.addColorStop(0, "#2e7d32");
+      groundGradient.addColorStop(1, "#1b5e20");
+      ctx.fillStyle = groundGradient;
+      ctx.fillRect(0, height * 0.6, width, height * 0.4);
+      
+      // Lake in foreground
+      ctx.fillStyle = "#0288d1";
+      ctx.beginPath();
+      ctx.ellipse(width * 0.5, height * 0.75, width * 0.3, height * 0.1, 0, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Add lake reflection
+      ctx.fillStyle = "rgba(255, 255, 255, 0.2)";
+      ctx.beginPath();
+      ctx.ellipse(width * 0.5, height * 0.75, width * 0.25, height * 0.05, 0, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Trees
+      drawTree(ctx, width * 0.2, height * 0.6, width * 0.05);
+      drawTree(ctx, width * 0.3, height * 0.62, width * 0.04);
+      drawTree(ctx, width * 0.8, height * 0.63, width * 0.06);
+      drawTree(ctx, width * 0.9, height * 0.61, width * 0.05);
+      
+      // Add some clouds
+      drawCloud(ctx, width * 0.2, height * 0.15, width * 0.15);
+      drawCloud(ctx, width * 0.5, height * 0.25, width * 0.2);
+      
+      // Add some birds
+      for (let i = 0; i < 5; i++) {
+        const birdX = Math.random() * width * 0.5 + width * 0.1;
+        const birdY = Math.random() * height * 0.3 + height * 0.1;
+        const birdSize = Math.random() * 5 + 3;
+        drawBird(ctx, birdX, birdY, birdSize);
+      }
+      
+      // Add fine details - grass blades in foreground
+      ctx.strokeStyle = "#388e3c";
+      ctx.lineWidth = 1;
+      for (let i = 0; i < 300; i++) {
+        const grassX = Math.random() * width;
+        const grassHeight = Math.random() * 15 + 5;
+        const grassY = height * 0.95;
+        
+        ctx.beginPath();
+        ctx.moveTo(grassX, grassY);
+        ctx.lineTo(grassX + Math.random() * 4 - 2, grassY - grassHeight);
+        ctx.stroke();
+      }
+      
+      // Add title
+      ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+      ctx.fillRect(width/2 - 150, 10, 300, 30);
+      ctx.fillStyle = "white";
+      ctx.font = "14px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText("Continuous Natural Scene (Analog Signal)", width/2, 30);
+    }
+    
+    // Helper function to draw a tree
+    function drawTree(ctx, x, y, size) {
+      // Tree trunk
+      ctx.fillStyle = "#795548";
+      ctx.fillRect(x - size * 0.1, y, size * 0.2, size * 0.8);
+      
+      // Tree foliage
+      ctx.fillStyle = "#2e7d32";
+      ctx.beginPath();
+      ctx.arc(x, y - size * 0.3, size * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Add some texture to the foliage
+      ctx.fillStyle = "#388e3c";
+      ctx.beginPath();
+      ctx.arc(x + size * 0.2, y - size * 0.4, size * 0.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    
+    // Helper function to draw a cloud
+    function drawCloud(ctx, x, y, size) {
+      ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
+      
+      // Draw cloud puffs
+      ctx.beginPath();
+      ctx.arc(x, y, size * 0.5, 0, Math.PI * 2);
+      ctx.arc(x + size * 0.4, y, size * 0.4, 0, Math.PI * 2);
+      ctx.arc(x + size * 0.8, y, size * 0.3, 0, Math.PI * 2);
+      ctx.arc(x + size * 0.4, y - size * 0.2, size * 0.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    
+    // Helper function to draw a bird
+    function drawBird(ctx, x, y, size) {
+      ctx.strokeStyle = "black";
+      ctx.lineWidth = 1;
+      
+      // Simple bird shape - just a curved "M" shape
+      ctx.beginPath();
+      ctx.moveTo(x - size, y);
+      ctx.quadraticCurveTo(x - size/2, y - size, x, y);
+      ctx.quadraticCurveTo(x + size/2, y - size, x + size, y);
+      ctx.stroke();
+    }
+  
+    // Render the sampled image based on the continuous function
+    function renderSampledImage(resolution, technique) {
+      // Create a canvas for the continuous function or use the photo
+      const continuousCanvas = document.createElement("canvas");
+      continuousCanvas.width = 400;
+      continuousCanvas.height = 400;
+      const continuousCtx = continuousCanvas.getContext("2d");
+      
+      if (currentImageSource === "generated") {
+        // Draw the continuous function
+        drawContinuousFunction(continuousCtx, 400, 400);
+      } else {
+        // Use the photo
+        continuousCtx.drawImage(photoImage, 0, 0, 400, 400);
+      }
+      
+      // Create a canvas for the sampled result
+      const sampledCanvas = document.createElement("canvas");
+      sampledCanvas.width = resolution;
+      sampledCanvas.height = resolution;
+      const sampledCtx = sampledCanvas.getContext("2d");
+      
+      // Clear the sampled canvas
+      sampledCtx.fillStyle = "white";
+      sampledCtx.fillRect(0, 0, resolution, resolution);
+      
+      // Get the continuous function data
+      const continuousData = continuousCtx.getImageData(0, 0, 400, 400).data;
+      
+      // Calculate pixel size
+      const pixelSizeX = 400 / resolution;
+      const pixelSizeY = 400 / resolution;
+      
+      // Create an ImageData object for the sampled result
+      const sampledData = sampledCtx.createImageData(resolution, resolution);
+      
+      // Apply the selected sampling technique
+      switch (technique) {
+        case "point":
+          // Point sampling (nearest neighbor at center)
+          for (let y = 0; y < resolution; y++) {
+            for (let x = 0; x < resolution; x++) {
+              // Sample at the center of each pixel
+              const sourceX = Math.floor(x * pixelSizeX + pixelSizeX / 2);
+              const sourceY = Math.floor(y * pixelSizeY + pixelSizeY / 2);
+              
+              // Get the color at this point
+              const sourceIndex = (sourceY * 400 + sourceX) * 4;
+              const targetIndex = (y * resolution + x) * 4;
+              
+              // Copy the color
+              sampledData.data[targetIndex] = continuousData[sourceIndex];
+              sampledData.data[targetIndex + 1] = continuousData[sourceIndex + 1];
+              sampledData.data[targetIndex + 2] = continuousData[sourceIndex + 2];
+              sampledData.data[targetIndex + 3] = 255; // Alpha
+            }
+          }
+          break;
+          
+        case "box":
+          // Box filter (average over a square area)
+          for (let y = 0; y < resolution; y++) {
+            for (let x = 0; x < resolution; x++) {
+              // Define the box boundaries
+              const startX = Math.floor(x * pixelSizeX);
+              const startY = Math.floor(y * pixelSizeY);
+              const endX = Math.min(startX + Math.ceil(pixelSizeX), 400);
+              const endY = Math.min(startY + Math.ceil(pixelSizeY), 400);
+              
+              // Initialize accumulators
+              let r = 0, g = 0, b = 0;
+              let count = 0;
+              
+              // Sum all pixels in the box
+              for (let sy = startY; sy < endY; sy++) {
+                for (let sx = startX; sx < endX; sx++) {
+                  const sourceIndex = (sy * 400 + sx) * 4;
+                  r += continuousData[sourceIndex];
+                  g += continuousData[sourceIndex + 1];
+                  b += continuousData[sourceIndex + 2];
+                  count++;
+                }
+              }
+              
+              // Calculate average and set the result
+              const targetIndex = (y * resolution + x) * 4;
+              sampledData.data[targetIndex] = r / count;
+              sampledData.data[targetIndex + 1] = g / count;
+              sampledData.data[targetIndex + 2] = b / count;
+              sampledData.data[targetIndex + 3] = 255; // Alpha
+            }
+          }
+          break;
+          
+        case "gaussian":
+          // Gaussian filter (weighted average with center emphasis)
+          for (let y = 0; y < resolution; y++) {
+            for (let x = 0; x < resolution; x++) {
+              // Define the sampling area
+              const centerX = x * pixelSizeX + pixelSizeX / 2;
+              const centerY = y * pixelSizeY + pixelSizeY / 2;
+              const radius = Math.max(pixelSizeX, pixelSizeY) * 0.75;
+              
+              // Define the gaussian sampling boundaries
+              const startX = Math.max(0, Math.floor(centerX - radius * 2));
+              const startY = Math.max(0, Math.floor(centerY - radius * 2));
+              const endX = Math.min(400, Math.ceil(centerX + radius * 2));
+              const endY = Math.min(400, Math.ceil(centerY + radius * 2));
+              
+              // Initialize weighted accumulators
+              let r = 0, g = 0, b = 0;
+              let weightSum = 0;
+              
+              // Apply gaussian weighting to each pixel in range
+              for (let sy = startY; sy < endY; sy++) {
+                for (let sx = startX; sx < endX; sx++) {
+                  // Calculate distance from center
+                  const dx = sx - centerX;
+                  const dy = sy - centerY;
+                  const distance = Math.sqrt(dx * dx + dy * dy);
+                  
+                  // Apply gaussian function for weight
+                  const sigma = radius / 2;
+                  const weight = Math.exp(-(distance * distance) / (2 * sigma * sigma));
+                  
+                  if (weight > 0.01) { // Ignore very small weights for efficiency
+                    const sourceIndex = (sy * 400 + sx) * 4;
+                    r += continuousData[sourceIndex] * weight;
+                    g += continuousData[sourceIndex + 1] * weight;
+                    b += continuousData[sourceIndex + 2] * weight;
+                    weightSum += weight;
+                  }
+                }
+              }
+              
+              // Set result with normalized weights
+              const targetIndex = (y * resolution + x) * 4;
+              sampledData.data[targetIndex] = r / weightSum;
+              sampledData.data[targetIndex + 1] = g / weightSum;
+              sampledData.data[targetIndex + 2] = b / weightSum;
+              sampledData.data[targetIndex + 3] = 255; // Alpha
+            }
+          }
+          break;
+          
+        case "lanczos":
+          // Lanczos filter (high quality reconstruction)
+          for (let y = 0; y < resolution; y++) {
+            for (let x = 0; x < resolution; x++) {
+              // Define the sampling point
+              const centerX = x * pixelSizeX + pixelSizeX / 2;
+              const centerY = y * pixelSizeY + pixelSizeY / 2;
+              const a = 3; // Lanczos parameter 
+              
+              // Define sampling boundaries
+              const startX = Math.max(0, Math.floor(centerX - a * pixelSizeX));
+              const startY = Math.max(0, Math.floor(centerY - a * pixelSizeY));
+              const endX = Math.min(400, Math.ceil(centerX + a * pixelSizeX));
+              const endY = Math.min(400, Math.ceil(centerY + a * pixelSizeY));
+              
+              // Initialize weighted accumulators
+              let r = 0, g = 0, b = 0;
+              let weightSum = 0;
+              
+              // Lanczos filter function
+              const lanczos = (x) => {
+                if (x === 0) return 1;
+                if (x > a) return 0;
+                const xPi = Math.PI * x;
+                return a * Math.sin(xPi) * Math.sin(xPi / a) / (xPi * xPi);
+              };
+              
+              // Apply Lanczos weighting
+              for (let sy = startY; sy < endY; sy++) {
+                for (let sx = startX; sx < endX; sx++) {
+                  // Calculate distances in terms of source pixels
+                  const dx = (sx - centerX) / pixelSizeX;
+                  const dy = (sy - centerY) / pixelSizeY;
+                  
+                  // Apply separable filter
+                  const weightX = lanczos(Math.abs(dx));
+                  const weightY = lanczos(Math.abs(dy));
+                  const weight = weightX * weightY;
+                  
+                  if (weight > 0.001) { // Ignore very small weights
+                    const sourceIndex = (sy * 400 + sx) * 4;
+                    r += continuousData[sourceIndex] * weight;
+                    g += continuousData[sourceIndex + 1] * weight;
+                    b += continuousData[sourceIndex + 2] * weight;
+                    weightSum += weight;
+                  }
+                }
+              }
+              
+              // Set the result with normalized weights
+              const targetIndex = (y * resolution + x) * 4;
+              sampledData.data[targetIndex] = r / weightSum;
+              sampledData.data[targetIndex + 1] = g / weightSum;
+              sampledData.data[targetIndex + 2] = b / weightSum;
+              sampledData.data[targetIndex + 3] = 255; // Alpha
+            }
+          }
+          break;
+      }
+      
+      // Put the sampled data on the canvas
+      sampledCtx.putImageData(sampledData, 0, 0);
+      
+      // Draw the result on the display canvas
+      ctx.clearRect(0, 0, 400, 400);
+      
+      // First, draw the original image with reduced opacity as background
+      ctx.globalAlpha = 0.2;
+      ctx.drawImage(continuousCanvas, 0, 0, 400, 400);
+      ctx.globalAlpha = 1.0;
+      
+      // Then draw the sampled image
+      ctx.imageSmoothingEnabled = false; // Prevent browser interpolation
+      ctx.drawImage(sampledCanvas, 0, 0, 400, 400);
+      
+      // Draw sampling points to visualize the discrete nature
+      // Calculate point size that scales better with resolution
+      // For low resolutions, points should be small
+      // For high resolutions, points should be very small or not visible
+      let samplePointSize = 0;
+      if (resolution <= 16) {
+        samplePointSize = 2; // Small fixed size for very low resolutions
+      } else if (resolution <= 32) {
+        samplePointSize = 1.5; // Smaller for medium-low resolutions
+      } else if (resolution <= 48) {
+        samplePointSize = 1; // Very small for medium resolutions
+      } else {
+        samplePointSize = 0; // No points for high resolutions
+      }
+      
+      // Only draw points if they have a size
+      if (samplePointSize > 0) {
+        // Create a separate canvas for the sampling points to avoid blending issues
+        const pointsCanvas = document.createElement("canvas");
+        pointsCanvas.width = 400;
+        pointsCanvas.height = 400;
+        const pointsCtx = pointsCanvas.getContext("2d");
+        
+        // Draw the sampling points
+        pointsCtx.fillStyle = "rgba(255, 0, 0, 0.7)";
+        
+        for (let y = 0; y < resolution; y++) {
+          for (let x = 0; x < resolution; x++) {
+            const displayX = (x + 0.5) * (400 / resolution);
+            const displayY = (y + 0.5) * (400 / resolution);
+            pointsCtx.beginPath();
+            pointsCtx.arc(displayX, displayY, samplePointSize, 0, Math.PI * 2);
+            pointsCtx.fill();
+          }
+        }
+        
+        // Draw the points canvas on top
+        ctx.drawImage(pointsCanvas, 0, 0);
+      }
+      
+      // Draw grid lines to visualize the pixel boundaries
+      const pixelDisplaySize = 400 / resolution;
+      ctx.strokeStyle = "rgba(200, 200, 200, 0.5)";
+      ctx.lineWidth = 1;
+      
+      for (let x = 0; x <= resolution; x++) {
+        ctx.beginPath();
+        ctx.moveTo(x * pixelDisplaySize, 0);
+        ctx.lineTo(x * pixelDisplaySize, 400);
+        ctx.stroke();
+      }
+      
+      for (let y = 0; y <= resolution; y++) {
+        ctx.beginPath();
+        ctx.moveTo(0, y * pixelDisplaySize);
+        ctx.lineTo(400, y * pixelDisplaySize);
+        ctx.stroke();
+      }
+      
+      // Add a label for the current technique
+      ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+      ctx.fillRect(10, 400 - 40, 380, 30);
+      ctx.fillStyle = "white";
+      ctx.font = "14px Arial";
+      ctx.textAlign = "center";
+      
+      let techniqueName = "";
+      switch (currentTechnique) {
+        case "point": techniqueName = "Point Sampling"; break;
+        case "box": techniqueName = "Box Filter"; break;
+        case "gaussian": techniqueName = "Gaussian Filter"; break;
+        case "lanczos": techniqueName = "Lanczos Filter"; break;
+      }
+      
+      // Add aliasing warning for low resolutions
+      let aliasingWarning = "";
+      if (resolution < 32 && (currentTechnique === "point" || currentImageSource !== "generated")) {
+        aliasingWarning = " | Aliasing visible";
+      }
+      
+      ctx.fillText(`${techniqueName} | Resolution: ${resolution}Ã—${resolution}${aliasingWarning}`, 400 / 2, 400 - 20);
+    }
+  
+    function showFilterInformation() {
+      // Create and show a modal with sampling filter explanations
+      const modal = document.createElement("div");
+      modal.classList.add("filter-info-modal");
+      
+      modal.innerHTML = `
+        <div class="modal-content">
+          <span class="close-button">&times;</span>
+          <h3>Sampling Techniques</h3>
+          <p>When creating a raster image, we need to convert continuous information (like a real-world scene or mathematical function) into discrete pixels. This process is called sampling.</p>
+          
+          <h4>Point Sampling</h4>
+          <p>The simplest approach: takes the color value exactly at the center of each pixel. This creates sharp but often aliased (jagged) images, especially with high-frequency signals.</p>
+          
+          <h4>Box Filter</h4>
+          <p>Calculates the average color within a square area for each pixel. This is more physically accurate as it represents capturing all the light that falls on a square sensor element. Reduces some aliasing but may cause blurring.</p>
+          
+          <h4>Gaussian Filter</h4>
+          <p>A weighted average that gives highest weight to the center of the pixel and gradually decreases weight with distance. This models how light intensity falls off on physical sensors and produces smoother results with less aliasing.</p>
+          
+          <h4>Lanczos Filter</h4>
+          <p>A high-quality reconstruction filter that attempts to preserve detail while minimizing artifacts. It uses mathematical principles to optimally reproduce the original signal from limited samples.</p>
+          
+          <h4>Aliasing and the Nyquist Limit</h4>
+          <p>When sampling a signal, you need at least 2 samples per cycle to accurately represent it (Nyquist limit). With fewer samples, high-frequency details appear as incorrect low-frequency patterns (aliasing).</p>
+          
+          <div class="filter-diagrams">
+            <div class="filter-diagram">
+              <canvas id="point-diagram" width="100" height="100"></canvas>
+              <p>Point</p>
+            </div>
+            <div class="filter-diagram">
+              <canvas id="box-diagram" width="100" height="100"></canvas>
+              <p>Box</p>
+            </div>
+            <div class="filter-diagram">
+              <canvas id="gaussian-diagram" width="100" height="100"></canvas>
+              <p>Gaussian</p>
+            </div>
+          </div>
+        </div>
+      `;
+      
+      document.body.appendChild(modal);
+      
+      // Draw the filter diagrams
+      drawFilterDiagrams();
+      
+      // Close button functionality
+      const closeButton = modal.querySelector(".close-button");
+      closeButton.addEventListener("click", () => {
+        document.body.removeChild(modal);
+      });
+      
+      // Close when clicking outside the content
+      modal.addEventListener("click", (e) => {
+        if (e.target === modal) {
+          document.body.removeChild(modal);
+        }
+      });
+    }
+    
+    function drawFilterDiagrams() {
+      // Point diagram
+      const pointCanvas = document.getElementById("point-diagram");
+      const pointCtx = pointCanvas.getContext("2d");
+      pointCtx.fillStyle = "#f0f0f0";
+      pointCtx.fillRect(0, 0, 100, 100);
+      pointCtx.strokeStyle = "#888";
+      pointCtx.strokeRect(0, 0, 100, 100);
+      pointCtx.fillStyle = "blue";
+      pointCtx.beginPath();
+      pointCtx.arc(50, 50, 4, 0, Math.PI * 2);
+      pointCtx.fill();
+      
+      // Box diagram
+      const boxCanvas = document.getElementById("box-diagram");
+      const boxCtx = boxCanvas.getContext("2d");
+      boxCtx.fillStyle = "#f0f0f0";
+      boxCtx.fillRect(0, 0, 100, 100);
+      boxCtx.strokeStyle = "#888";
+      boxCtx.strokeRect(0, 0, 100, 100);
+      boxCtx.fillStyle = "rgba(0, 0, 255, 0.3)";
+      boxCtx.fillRect(20, 20, 60, 60);
+      
+      // Gaussian diagram
+      const gaussCanvas = document.getElementById("gaussian-diagram");
+      const gaussCtx = gaussCanvas.getContext("2d");
+      gaussCtx.fillStyle = "#f0f0f0";
+      gaussCtx.fillRect(0, 0, 100, 100);
+      gaussCtx.strokeStyle = "#888";
+      gaussCtx.strokeRect(0, 0, 100, 100);
+      
+      // Draw a gaussian distribution
+      const gradient = gaussCtx.createRadialGradient(50, 50, 0, 50, 50, 50);
+      gradient.addColorStop(0, "rgba(0, 0, 255, 0.7)");
+      gradient.addColorStop(0.3, "rgba(0, 0, 255, 0.4)");
+      gradient.addColorStop(0.6, "rgba(0, 0, 255, 0.1)");
+      gradient.addColorStop(1, "rgba(0, 0, 255, 0)");
+      gaussCtx.fillStyle = gradient;
+      gaussCtx.beginPath();
+      gaussCtx.arc(50, 50, 50, 0, Math.PI * 2);
+      gaussCtx.fill();
+    }
+  
+    function animateResolution() {
+      let direction = 1;
+      let animResolution = currentResolution;
+      
+      function animate() {
+        // Animate between 8 and max resolution
+        if (animResolution >= parseInt(resolutionSlider.max)) direction = -1;
+        if (animResolution <= 8) direction = 1;
+        
+        // Increment by larger steps for higher resolutions to speed up animation
+        let step = 2;
+        if (animResolution > 128) step = 8;
+        else if (animResolution > 64) step = 4;
+        
+        animResolution += direction * step;
+        resolutionSlider.value = animResolution;
+        resolutionValue.textContent = `${animResolution}Ã—${animResolution}`;
+        renderSampledImage(animResolution, currentTechnique);
+        animationId = requestAnimationFrame(animate);
+      }
+      
+      animationId = requestAnimationFrame(animate);
+    }
+  }
+  
+  
+
+    setupGridContainers();
+  // ===== Color Depth Demo Section =====
+// ===== Color Depth Demo Section =====
+function initColorDepthDemo() {
+    const sourceImage = document.getElementById("depth-source-image");
+    const depthCanvas = document.getElementById("depth-canvas");
+    const bitDepthSelect = document.getElementById("bit-depth");
+    const applyButton = document.getElementById("apply-bit-depth");
+  
+    // Create a colorful pattern image instead of loading from external source
+    const patternCanvas = document.createElement("canvas");
+    patternCanvas.width = 400;
+    patternCanvas.height = 400;
+    const patternCtx = patternCanvas.getContext("2d");
+    
+    // Create a different pattern for color depth demo
+    // Radial gradient
+    const gradient = patternCtx.createRadialGradient(200, 200, 50, 200, 200, 200);
+    gradient.addColorStop(0, "#f1c40f");
+    gradient.addColorStop(0.4, "#e74c3c");
+    gradient.addColorStop(0.7, "#9b59b6");
+    gradient.addColorStop(1, "#3498db");
+    patternCtx.fillStyle = gradient;
+    patternCtx.fillRect(0, 0, 400, 400);
+    
+    // Add a simple pattern
+    for (let y = 0; y < 8; y++) {
+      for (let x = 0; x < 8; x++) {
+        if ((x + y) % 2 === 0) {
+          patternCtx.fillStyle = "rgba(255, 255, 255, 0.1)";
+          patternCtx.fillRect(x * 50, y * 50, 50, 50);
+        }
+      }
+    }
+  
+    // Use the pattern as the source image
+    sourceImage.src = patternCanvas.toDataURL();
+  
+    const ctx = depthCanvas.getContext("2d");
+  
+    // Apply bit depth
+    applyButton.addEventListener("click", () => {
+      const bitDepth = parseInt(bitDepthSelect.value);
+      applyBitDepth(bitDepth);
+    });
+  
+    // Wait for image to load
+    sourceImage.addEventListener("load", () => {
+      ctx.drawImage(sourceImage, 0, 0, depthCanvas.width, depthCanvas.height);
+    });
+  
+    function applyBitDepth(bitDepth) {
+      // Draw original image
+      ctx.drawImage(sourceImage, 0, 0, depthCanvas.width, depthCanvas.height);
+  
+      // Get image data
+      const imageData = ctx.getImageData(
+        0,
+        0,
+        depthCanvas.width,
+        depthCanvas.height
+      );
+      const data = imageData.data;
+  
+      // Calculate color levels based on bit depth
+      const levels = Math.pow(2, bitDepth / 3);
+      const factor = 255 / (levels - 1);
+  
+      // Process each pixel
+      for (let i = 0; i < data.length; i += 4) {
+        // Special case for 1-bit (black and white)
+        if (bitDepth === 1) {
+          const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+          const bw = avg > 127 ? 255 : 0;
+          data[i] = data[i + 1] = data[i + 2] = bw;
+        } else {
+          // For other bit depths
+          for (let j = 0; j < 3; j++) {
+            const colorComponent = data[i + j];
+            // Quantize the color to fewer levels
+            const quantized = Math.round(colorComponent / factor) * factor;
+            data[i + j] = quantized;
+          }
+        }
+      }
+  
+      // Put the processed data back
+      ctx.putImageData(imageData, 0, 0);
+    }
+  }
+  
+  // Add this new function for binary grid panning
+  // Binary grid panning is now handled directly in the createGrid function
+    if (binaryGridWithAxes) {
+      // Add wheel event for binary grid zooming
+      binaryGridWithAxes.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+        zoomGrid(zoomFactor, false);
+      });
+      
+      // Add mousedown event for binary grid panning with better event handling
+      binaryGridWithAxes.addEventListener("mousedown", (e) => {
+        // Explicitly check for middle button (button 1) or left button with Space modifier
+        if (e.button === 1 || (e.button === 0 && e.getModifierState("Space"))) {
+          // Prevent default browser behavior
+          e.preventDefault();
+          e.stopPropagation();
+          
+          // Set panning variables
+          isBinaryPanning = true;
+          startBinaryPanX = e.clientX - binaryPanX;
+          startBinaryPanY = e.clientY - binaryPanY;
+          binaryGridWithAxes.style.cursor = "grabbing";
+          
+          // Add specific listeners for this panning session
+          document.addEventListener("mousemove", (e) => {
+            if (isBinaryPanning) {
+              e.preventDefault();
+              binaryPanX = e.clientX - startBinaryPanX;
+              binaryPanY = e.clientY - startBinaryPanY;
+              applyBinaryTransform();
+            }
+          });
+          
+          document.addEventListener("mouseup", () => {
+            if (isBinaryPanning) {
+              isBinaryPanning = false;
+              binaryGridWithAxes.style.cursor = e.getModifierState("Space") ? "grab" : "default";
+            }
+          });
+        }
+      });
+      
+      // Still add mouseleave event for safety
+      binaryGridWithAxes.addEventListener("mouseleave", () => {
+        if (isBinaryPanning) {
+          isBinaryPanning = false;
+          binaryGridWithAxes.style.cursor = "default";
+          
+          // Clean up event listeners
+          document.removeEventListener("mousemove", handleBinaryPanMove);
+          document.removeEventListener("mouseup", handleBinaryPanEnd);
+        }
+      });
+    }
+  }
+  
+  // Add these helper functions for binary panning
+  function handleBinaryPanMove(e) {
+    if (isBinaryPanning) {
+      e.preventDefault();
+      binaryPanX = e.clientX - startBinaryPanX;
+      binaryPanY = e.clientY - startBinaryPanY;
+      applyBinaryTransform();
+    }
+  }
+  
+  function handleBinaryPanEnd(e) {
+    if (isBinaryPanning) {
+      e.preventDefault();
+      isBinaryPanning = false;
+      
+      const binaryGridWithAxes = document.querySelector('.binary-grid-with-axes');
+      if (binaryGridWithAxes) {
+        binaryGridWithAxes.style.cursor = e.getModifierState("Space") ? "grab" : "default";
+      }
+      
+      // Clean up event listeners
+      document.removeEventListener("mousemove", handleBinaryPanMove);
+      document.removeEventListener("mouseup", handleBinaryPanEnd);
+    }
+  }
+  
+  
